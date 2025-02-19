@@ -1,0 +1,20 @@
+# Vscode ignore
+**/vscode
+**/.vscode
+
+
+# Python ignore
+**/__pycache__
+**/*.pyc
+**/*.pyi
+
+
+# Mac ignore
+**/.DS_Store
+
+
+# Environmet ignore
+**/.env
+**/env
+**/.venv
+**/venv
