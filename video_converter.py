@@ -1,5 +1,5 @@
 import subprocess
-from enum import Enum
+from enum import Enum, auto
 from pathlib import Path
 from typing import Optional, Union
 
@@ -14,7 +14,7 @@ class AspectRatio(Enum):
     AR_5_3 = "5:3"
     AR_5_4 = "5:4"
     AR_1_1 = "1:1"
-    AR_32_9 = "32:9"  
+    AR_32_9 = "32:9"
     AR_1_85_1 = "37:20"
     AR_2_39_1 = "239:100"
 
@@ -37,9 +37,46 @@ class Resolution(Enum):
     R_360P = "640x360"
 
 
+class FfmpegPreset(Enum):
+    """FFmpeg sıkıştırma hız/kalite presetleri"""
+
+    ULTRAFAST = "ultrafast"  # En hızlı, en düşük sıkıştırma
+    SUPERFAST = "superfast"
+    VERYFAST = "veryfast"
+    FASTER = "faster"
+    FAST = "fast"
+    MEDIUM = "medium"  # Varsayılan, dengeli
+    SLOW = "slow"
+    SLOWER = "slower"
+    VERYSLOW = "veryslow"  # En yavaş, en iyi sıkıştırma
+
+
+class VideoCodec(Enum):
+    """Video codec seçenekleri"""
+
+    # H.264 / AVC codec'ler
+    H264 = "libx264"  # Yaygın kullanılan, iyi uyumluluk
+    H264_NVENC = "h264_nvenc"  # NVIDIA GPU hızlandırmalı H.264
+    H264_QSV = "h264_qsv"  # Intel Quick Sync Video H.264
+    H264_AMF = "h264_amf"  # AMD GPU hızlandırmalı H.264
+
+    # H.265 / HEVC codec'ler
+    H265 = "libx265"  # Daha iyi sıkıştırma, daha yavaş
+    H265_NVENC = "hevc_nvenc"  # NVIDIA GPU hızlandırmalı H.265
+    H265_QSV = "hevc_qsv"  # Intel Quick Sync Video H.265
+    H265_AMF = "hevc_amf"  # AMD GPU hızlandırmalı H.265
+
+    # Diğer codec'ler
+    VP8 = "libvpx"  # WebM için
+    VP9 = "libvpx-vp9"  # WebM için, daha iyi sıkıştırma
+    AV1 = "libaom-av1"  # AV1 codec, çok iyi sıkıştırma ama çok yavaş
+    MPEG4 = "mpeg4"  # Eski ama yaygın format
+    MPEG2 = "mpeg2video"  # DVD uyumlu
+
+
 class FfmpegVideoConverterClass:
     """FFmpeg kullanarak video dönüştürme işlemleri yapan sınıf.
-    
+
     :param input_file: İşlenecek video dosyasının yolu
     :type input_file: Union[str, Path]
     """
@@ -62,6 +99,7 @@ class FfmpegVideoConverterClass:
         .. code-block:: python
             converter.set_resolution(Resolution.R_1080P)
         """
+        
         self.output_options.extend(["-s", resolution.value])
         return self
 
@@ -77,6 +115,7 @@ class FfmpegVideoConverterClass:
         .. code-block:: python
             converter.set_aspect_ratio(AspectRatio.AR_16_9)
         """
+        
         self.output_options.extend(["-aspect", aspect_ratio.value])
         return self
 
@@ -92,6 +131,7 @@ class FfmpegVideoConverterClass:
         .. code-block:: python
             converter.add_subtitle("altyazi.srt")
         """
+        
         self.output_options.extend(["-vf", f"subtitles={subtitle_file}"])
         return self
 
@@ -109,7 +149,21 @@ class FfmpegVideoConverterClass:
         .. code-block:: python
             converter.add_watermark("logo.png", "10:10")
         """
+        
         self.output_options.extend(["-vf", f"movie={watermark_file}[watermark];[in][watermark]overlay={position}[out]"])
+        return self
+
+    def mirror(self):
+        """Videoyu aynada izliyormuş gibi yatay eksende çevirir.
+
+        :return: Sınıfın kendisi (method chaining için)
+        :rtype: FfmpegVideoConverterClass
+
+        .. code-block:: python
+            converter.mirror()
+        """
+        
+        self.output_options.extend(["-vf", "hflip"])
         return self
 
     def trim_video(self, start_time: str, end_time: str) -> "FfmpegVideoConverterClass":
@@ -130,7 +184,7 @@ class FfmpegVideoConverterClass:
             # HH:MM:SS formatında kullanım
             converter.trim_video("00:10:00", "00:25:00")
         """
-        # Eğer sadece dakika girilmişse HH:MM:SS formatına çevir
+        
         if ":" not in start_time:
             start_time = f"00:{int(start_time):02d}:00"
         if ":" not in end_time:
@@ -153,10 +207,77 @@ class FfmpegVideoConverterClass:
             # veya format değiştirmeden
             converter.change_format()
         """
+        
         if output_format:
             if not output_format.startswith("."):
                 output_format = f".{output_format}"
             self.output_format = output_format
+        return self
+
+    def _check_codec_availability(self, codec: VideoCodec) -> bool:
+        """Seçilen codec'in sistemde kullanılabilir olup olmadığını kontrol eder.
+
+        :param codec: Kontrol edilecek codec
+        :type codec: VideoCodec
+
+        :return: Codec kullanılabilir ise True, değilse False
+        :rtype: bool
+        """
+        
+        try:
+            result = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True, check=True)
+            return codec.value in result.stdout
+        except subprocess.CalledProcessError:
+            return False
+
+    def compress_video(self, crf: int = 23, codec: VideoCodec = VideoCodec.H264, preset: FfmpegPreset = FfmpegPreset.MEDIUM) -> "FfmpegVideoConverterClass":
+        """Video boyutunu sıkıştırır, çözünürlük ve oranı korur.
+
+        :param crf: Constant Rate Factor değeri (0-51). Varsayılan: 23 tür. Önerilen 18-28 arasındaki değerlerdir.  \n
+                - Düşük değer = yüksek kalite/büyük boyut,
+                - Yüksek değer = düşük kalite/küçük boyut.
+                - Her +6 değer dosya boyutunu yaklaşık yarıya indirir
+        :type crf: int
+
+        :param codec: Video codec seçeneği. Varsayılan: VideoCodec.H264
+        :type codec: VideoCodec
+
+        :param preset: Sıkıştırma preset değeri. Varsayılan: FfmpegPreset.MEDIUM
+        :type preset: FfmpegPreset
+
+        :return: Sınıfın kendisi (method chaining için)
+        :rtype: FfmpegVideoConverterClass
+
+        .. code-block:: python
+            # Varsayılan ayarlarla sıkıştırma
+            converter.compress_video()
+            # veya
+            # Özel ayarlarla sıkıştırma
+            converter.compress_video(
+                crf=20,
+                codec=VideoCodec.H265,
+                preset=FfmpegPreset.SLOW
+            )
+        """
+        
+        if not 0 <= crf <= 51:
+            raise ValueError("CRF değeri 0-51 arasında olmalıdır")
+
+
+        if not self._check_codec_availability(codec):
+            
+            if codec in [VideoCodec.H264_NVENC, VideoCodec.H264_QSV, VideoCodec.H264_AMF]:
+                print(f"Uyarı: {codec.value} kullanılamıyor, libx264'e geçiliyor...")
+                codec = VideoCodec.H264
+            elif codec in [VideoCodec.H265_NVENC, VideoCodec.H265_QSV, VideoCodec.H265_AMF]:
+                print(f"Uyarı: {codec.value} kullanılamıyor, libx265'e geçiliyor...")
+                codec = VideoCodec.H265
+
+            
+            if not self._check_codec_availability(codec):
+                raise RuntimeError(f"Codec {codec.value} sisteminizde kullanılamıyor. Lütfen FFmpeg kurulumunuzu kontrol edin.")
+
+        self.output_options.extend(["-c:v", codec.value, "-crf", str(crf), "-preset", preset.value])
         return self
 
     def convert(self, output_file: Optional[Union[str, Path]] = None) -> bool:
@@ -179,21 +300,27 @@ class FfmpegVideoConverterClass:
 
         :raises subprocess.CalledProcessError: FFmpeg işlemi başarısız olduğunda
         """
+        
         if output_file is None:
             input_path = Path(self.input_file)
             output_suffix = self.output_format if self.output_format else input_path.suffix
             output_file = input_path.with_suffix(output_suffix)
         else:
-            # Eğer output_file belirtilmiş ve yeni format ayarlanmışsa
             if self.output_format:
                 output_file = Path(output_file).with_suffix(self.output_format)
             output_file = str(output_file)
-        
+
         final_command = self.ffmpeg_cmd + self.output_options + ["-y", str(output_file)]
 
         try:
-            subprocess.run(final_command, check=True, capture_output=True)
+            process = subprocess.run(final_command, check=True, capture_output=True, text=True)
             return True
         except subprocess.CalledProcessError as e:
-            print(f"Hata oluştu: {e.stderr.decode()}")
+            error_msg = e.stderr
+            if "Error selecting an encoder" in error_msg:
+                print("Hata: Codec bulunamadı. Lütfen FFmpeg kurulumunuzu kontrol edin.")
+                print("Mevcut codec'leri görmek için:")
+                print("ffmpeg -encoders")
+            else:
+                print(f"Hata oluştu: {error_msg}")
             return False
